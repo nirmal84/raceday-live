@@ -1,0 +1,12 @@
+{
+  "name": "raceday-live",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently --names \"frontend,backend\" --prefix-colors \"cyan,yellow\" \"npm run dev --prefix frontend\" \"npm run dev --prefix backend\"",
+    "install:all": "npm install --prefix frontend && npm install --prefix backend && npm install --prefix infra"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  }
+}
