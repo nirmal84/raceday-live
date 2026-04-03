@@ -115,23 +115,12 @@ cdk deploy DevOpsAgentStack
 
 > `notifyEmail` is optional. If provided, you'll receive an email when alarms fire — confirm the SNS subscription from your inbox.
 
-### 2a. Connect DevOps Agent to CloudWatch Alarms (post-deploy)
+The CloudWatch → SNS → DevOps Agent webhook subscription is **fully automated**. During `DevOpsAgentStack` deployment, a CDK custom resource Lambda:
+1. Calls `ListWebhooks` on the DevOps Agent API to retrieve the EventChannel webhook URL
+2. Subscribes the URL to the `raceday-incidents` SNS topic automatically
+3. Unsubscribes automatically when the stack is deleted
 
-After `DevOpsAgentStack` deploys, complete the webhook subscription so CloudWatch alarm events flow into the DevOps Agent:
-
-1. Open the [AWS DevOps Agent console](https://console.aws.amazon.com/devops-agent)
-2. Navigate to the **RaceDayLive** Agent Space → EventChannel association
-3. Copy the **webhook URL**
-4. Subscribe it to the `raceday-incidents` SNS topic:
-
-```bash
-aws sns subscribe \
-  --topic-arn $(cat outputs.json | jq -r '.MonitoringStack.SnsTopicArn') \
-  --protocol https \
-  --notification-endpoint <webhook-url-from-console>
-```
-
-The DevOps Agent will now automatically trigger an investigation when a `RaceDayLive-ServiceErrorRate` or `RaceDayLive-BetPlacementLatencyP99` alarm fires.
+The webhook URL and SNS subscription ARN are available as stack outputs. No manual steps required.
 
 ### 2. Build & Deploy Frontend
 
@@ -162,9 +151,10 @@ The app will be live at the `CloudFrontDomain` output URL.
 | `MonitoringStack` | `SnsTopicArn` | SNS topic for incident alerts |
 | `DevOpsAgentStack` | `AgentSpaceId` | DevOps Agent Space ID |
 | `DevOpsAgentStack` | `AgentSpaceArn` | DevOps Agent Space ARN |
-| `DevOpsAgentStack` | `DevOpsAgentRoleArn` | IAM role assumed by the agent during investigations |
-| `DevOpsAgentStack` | `EventChannelAssociationId` | EventChannel Association ID |
-| `DevOpsAgentStack` | `WebhookSetupInstructions` | Step-by-step SNS webhook subscription command |
+| `DevOpsAgentStack` | `AgentSpaceRoleArn` | IAM role (`AIDevOpsAgentAccessPolicy`) assumed by the agent |
+| `DevOpsAgentStack` | `OperatorRoleArn` | IAM role for the DevOps Agent web console |
+| `DevOpsAgentStack` | `WebhookUrl` | EventChannel webhook URL (already subscribed to SNS) |
+| `DevOpsAgentStack` | `SnsSubscriptionArn` | SNS subscription ARN for the webhook |
 
 ## DevOps Agent Resources
 
@@ -172,12 +162,19 @@ Provisioned by `DevOpsAgentStack`:
 
 | Resource | Type | Description |
 |---|---|---|
-| `RaceDayLive` AgentSpace | `AWS::DevOpsAgent::AgentSpace` | Agent workspace — AWS default KMS key and OperatorApp |
-| SourceAws Association | `AWS::DevOpsAgent::Association` | Gives agent read visibility into this account via `RaceDayLive-DevOpsAgentRole` |
-| EventChannel Association | `AWS::DevOpsAgent::Association` | Webhook endpoint for receiving CloudWatch alarm events (`EnableWebhookUpdates: true`) |
-| `RaceDayLive-DevOpsAgentRole` | `AWS::IAM::Role` | `ReadOnlyAccess` + CloudWatch/Logs read — assumed by `devops-agent.amazonaws.com` |
+| `RaceDayLive` AgentSpace | `AWS::DevOpsAgent::AgentSpace` | Agent workspace — AWS default KMS key, IAM-backed operator app |
+| `DevOpsAgentRole-AgentSpace` | `AWS::IAM::Role` | `AIDevOpsAgentAccessPolicy` — assumed by `aidevops.amazonaws.com` to monitor this account |
+| `DevOpsAgentRole-WebappAdmin` | `AWS::IAM::Role` | `AIDevOpsOperatorAppAccessPolicy` — used by the DevOps Agent web console |
+| Monitor Association | `AWS::DevOpsAgent::Association` | `Aws/monitor` — gives agent full monitoring visibility into this account |
+| EventChannel Association | `AWS::DevOpsAgent::Association` | Webhook endpoint for CloudWatch alarm events (`EnableWebhookUpdates: true`) |
+| `WebhookSetupFn` | Lambda | Custom resource: calls `ListWebhooks`, subscribes webhook URL to `raceday-incidents` SNS |
 
-**Adding capabilities later:** The CDK stack uses `CfnResource` for all DevOps Agent resources. To add capabilities (e.g. Slack, ServiceNow, MCP servers) add new `AWS::DevOpsAgent::Association` resources to `devops-agent-stack.ts`. Services requiring OAuth (Datadog, GitHub, Slack) must be registered interactively via the console first, then referenced by ServiceId in CDK.
+**Alarm → Agent flow (fully automated after deploy):**
+```
+CloudWatch Alarm fires → SNS raceday-incidents → DevOps Agent EventChannel webhook → Agent investigates
+```
+
+**Adding capabilities later:** Add new `AWS::DevOpsAgent::Association` `CfnResource` blocks to `devops-agent-stack.ts`. Services requiring OAuth (GitHub, Slack, Datadog) must be registered interactively in the console first, then referenced by `ServiceId` in CDK.
 
 ## CloudWatch Resources
 
