@@ -73,8 +73,9 @@ raceday-live/
 ├── infra/             # AWS CDK (TypeScript)
 │   ├── bin/raceday.ts
 │   ├── lib/
-│   │   ├── raceday-stack.ts    # S3, CloudFront, Lambda, API GW, SSM
-│   │   └── monitoring-stack.ts # SNS, CloudWatch alarms, dashboard
+│   │   ├── raceday-stack.ts      # S3, CloudFront, Lambda, API GW, SSM
+│   │   ├── monitoring-stack.ts   # SNS, CloudWatch alarms, dashboard
+│   │   └── devops-agent-stack.ts # AgentSpace, SourceAws + EventChannel associations
 │   └── package.json
 └── package.json       # Root: `npm run dev` starts both services
 ```
@@ -109,9 +110,28 @@ npm install
 cdk bootstrap   # first time only, per account/region
 cdk deploy RaceDayStack --outputs-file outputs.json
 cdk deploy MonitoringStack -c notifyEmail=you@example.com
+cdk deploy DevOpsAgentStack
 ```
 
 > `notifyEmail` is optional. If provided, you'll receive an email when alarms fire — confirm the SNS subscription from your inbox.
+
+### 2a. Connect DevOps Agent to CloudWatch Alarms (post-deploy)
+
+After `DevOpsAgentStack` deploys, complete the webhook subscription so CloudWatch alarm events flow into the DevOps Agent:
+
+1. Open the [AWS DevOps Agent console](https://console.aws.amazon.com/devops-agent)
+2. Navigate to the **RaceDayLive** Agent Space → EventChannel association
+3. Copy the **webhook URL**
+4. Subscribe it to the `raceday-incidents` SNS topic:
+
+```bash
+aws sns subscribe \
+  --topic-arn $(cat outputs.json | jq -r '.MonitoringStack.SnsTopicArn') \
+  --protocol https \
+  --notification-endpoint <webhook-url-from-console>
+```
+
+The DevOps Agent will now automatically trigger an investigation when a `RaceDayLive-ServiceErrorRate` or `RaceDayLive-BetPlacementLatencyP99` alarm fires.
 
 ### 2. Build & Deploy Frontend
 
@@ -133,13 +153,31 @@ The app will be live at the `CloudFrontDomain` output URL.
 
 ### CDK Outputs
 
-| Output | Description |
-|---|---|
-| `ApiEndpoint` | API Gateway URL — use as `VITE_API_BASE_URL` |
-| `CloudFrontDomain` | Frontend URL |
-| `S3BucketName` | Sync `frontend/dist/` here |
-| `CloudFrontDistributionId` | Run cache invalidation after frontend deploy |
-| `SnsTopicArn` | SNS topic for incident alerts |
+| Stack | Output | Description |
+|---|---|---|
+| `RaceDayStack` | `ApiEndpoint` | API Gateway URL — use as `VITE_API_BASE_URL` |
+| `RaceDayStack` | `CloudFrontDomain` | Frontend URL |
+| `RaceDayStack` | `S3BucketName` | Sync `frontend/dist/` here |
+| `RaceDayStack` | `CloudFrontDistributionId` | Run cache invalidation after frontend deploy |
+| `MonitoringStack` | `SnsTopicArn` | SNS topic for incident alerts |
+| `DevOpsAgentStack` | `AgentSpaceId` | DevOps Agent Space ID |
+| `DevOpsAgentStack` | `AgentSpaceArn` | DevOps Agent Space ARN |
+| `DevOpsAgentStack` | `DevOpsAgentRoleArn` | IAM role assumed by the agent during investigations |
+| `DevOpsAgentStack` | `EventChannelAssociationId` | EventChannel Association ID |
+| `DevOpsAgentStack` | `WebhookSetupInstructions` | Step-by-step SNS webhook subscription command |
+
+## DevOps Agent Resources
+
+Provisioned by `DevOpsAgentStack`:
+
+| Resource | Type | Description |
+|---|---|---|
+| `RaceDayLive` AgentSpace | `AWS::DevOpsAgent::AgentSpace` | Agent workspace — AWS default KMS key and OperatorApp |
+| SourceAws Association | `AWS::DevOpsAgent::Association` | Gives agent read visibility into this account via `RaceDayLive-DevOpsAgentRole` |
+| EventChannel Association | `AWS::DevOpsAgent::Association` | Webhook endpoint for receiving CloudWatch alarm events (`EnableWebhookUpdates: true`) |
+| `RaceDayLive-DevOpsAgentRole` | `AWS::IAM::Role` | `ReadOnlyAccess` + CloudWatch/Logs read — assumed by `devops-agent.amazonaws.com` |
+
+**Adding capabilities later:** The CDK stack uses `CfnResource` for all DevOps Agent resources. To add capabilities (e.g. Slack, ServiceNow, MCP servers) add new `AWS::DevOpsAgent::Association` resources to `devops-agent-stack.ts`. Services requiring OAuth (Datadog, GitHub, Slack) must be registered interactively via the console first, then referenced by ServiceId in CDK.
 
 ## CloudWatch Resources
 

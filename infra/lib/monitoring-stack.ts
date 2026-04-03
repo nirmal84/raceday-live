@@ -12,6 +12,9 @@ interface MonitoringStackProps extends cdk.StackProps {
 const NAMESPACE = 'RaceDayLive/Platform'
 
 export class MonitoringStack extends cdk.Stack {
+  /** ARN of the raceday-incidents SNS topic — consumed by DevOpsAgentStack */
+  public readonly snsTopicArn: string
+
   constructor(scope: Construct, id: string, props: MonitoringStackProps) {
     super(scope, id, props)
 
@@ -20,6 +23,8 @@ export class MonitoringStack extends cdk.Stack {
       topicName: 'raceday-incidents',
       displayName: 'RaceDay Live Incidents',
     })
+
+    this.snsTopicArn = topic.topicArn
 
     if (props.notifyEmail) {
       topic.addSubscription(new snsSubscriptions.EmailSubscription(props.notifyEmail))
