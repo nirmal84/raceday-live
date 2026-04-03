@@ -15,6 +15,10 @@ const FAULT_STATE_PARAM = '/raceday/fault/state'
 
 export class RaceDayStack extends cdk.Stack {
   public readonly serviceErrorRateAlarmName: string
+  /** S3 bucket hosting the frontend — consumed by FrontendDeployStack */
+  public readonly siteBucket: s3.Bucket
+  /** CloudFront distribution — consumed by FrontendDeployStack for cache invalidation */
+  public readonly distribution: cloudfront.Distribution
 
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props)
@@ -27,17 +31,17 @@ export class RaceDayStack extends cdk.Stack {
     })
 
     // ── S3 Bucket (frontend) ──────────────────────────────────────────────────
-    const siteBucket = new s3.Bucket(this, 'SiteBucket', {
+    this.siteBucket = new s3.Bucket(this, 'SiteBucket', {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       versioned: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     })
 
     // ── CloudFront ────────────────────────────────────────────────────────────
-    const distribution = new cloudfront.Distribution(this, 'SiteDistribution', {
+    this.distribution = new cloudfront.Distribution(this, 'SiteDistribution', {
       defaultRootObject: 'index.html',
       defaultBehavior: {
-        origin: origins.S3BucketOrigin.withOriginAccessControl(siteBucket),
+        origin: origins.S3BucketOrigin.withOriginAccessControl(this.siteBucket),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
       },
@@ -50,7 +54,7 @@ export class RaceDayStack extends cdk.Stack {
       ],
     })
 
-    const cloudfrontDomain = `https://${distribution.distributionDomainName}`
+    const cloudfrontDomain = `https://${this.distribution.distributionDomainName}`
 
     // ── Lambda (bundled via esbuild) ──────────────────────────────────────────
     const backendFn = new NodejsFunction(this, 'BackendFn', {
@@ -111,12 +115,12 @@ export class RaceDayStack extends cdk.Stack {
     })
 
     new cdk.CfnOutput(this, 'S3BucketName', {
-      value: siteBucket.bucketName,
+      value: this.siteBucket.bucketName,
       description: 'Run: aws s3 sync frontend/dist/ s3://<bucket> --delete',
     })
 
     new cdk.CfnOutput(this, 'CloudFrontDistributionId', {
-      value: distribution.distributionId,
+      value: this.distribution.distributionId,
       description: 'Run: aws cloudfront create-invalidation --distribution-id <id> --paths "/*"',
     })
 

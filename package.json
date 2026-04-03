@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "concurrently --names \"frontend,backend\" --prefix-colors \"cyan,yellow\" \"npm run dev --prefix frontend\" \"npm run dev --prefix backend\"",
+    "deploy": "bash scripts/deploy.sh",
     "install:all": "npm install --prefix frontend && npm install --prefix backend && npm install --prefix infra"
   },
   "devDependencies": {

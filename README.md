@@ -73,9 +73,12 @@ raceday-live/
 ├── infra/             # AWS CDK (TypeScript)
 │   ├── bin/raceday.ts
 │   ├── lib/
-│   │   ├── raceday-stack.ts      # S3, CloudFront, Lambda, API GW, SSM
-│   │   ├── monitoring-stack.ts   # SNS, CloudWatch alarms, dashboard
-│   │   └── devops-agent-stack.ts # AgentSpace, SourceAws + EventChannel associations
+│   │   ├── raceday-stack.ts        # S3, CloudFront, Lambda, API GW, SSM
+│   │   ├── frontend-deploy-stack.ts# npm build + S3 upload + CF invalidation
+│   │   ├── monitoring-stack.ts     # SNS, CloudWatch alarms, dashboard
+│   │   └── devops-agent-stack.ts   # AgentSpace, associations, webhook automation
+│   ├── lambda/
+│   │   └── webhook-setup.mjs       # Custom resource: ListWebhooks → SNS Subscribe
 │   └── package.json
 └── package.json       # Root: `npm run dev` starts both services
 ```
@@ -102,43 +105,37 @@ The admin panel is accessible via **Ctrl+Shift+D** — it's intentionally not li
 - AWS CDK CLI (`npm install -g aws-cdk`)
 - Node.js 20+
 
-### 1. Deploy Infrastructure
+### One-command deploy
+
+```bash
+# From repo root — deploys everything including frontend build
+npm run deploy
+
+# With SNS email alerts
+NOTIFY_EMAIL=you@example.com npm run deploy
+```
+
+`scripts/deploy.sh` does this automatically:
+1. `cdk deploy RaceDayStack` — Lambda, API GW, S3, CloudFront, SSM
+2. `cdk deploy FrontendDeployStack -c apiUrl=<url>` — builds React with `VITE_API_BASE_URL` baked in, uploads to S3, invalidates CloudFront cache
+3. `cdk deploy MonitoringStack` — SNS, CloudWatch alarms, dashboard
+4. `cdk deploy DevOpsAgentStack` — AgentSpace, associations, SNS webhook auto-wired
+
+The CloudWatch → SNS → DevOps Agent webhook subscription is **fully automated** — a CDK custom resource Lambda calls `ListWebhooks` then subscribes to SNS. No manual steps.
+
+### Manual step-by-step (if preferred)
 
 ```bash
 cd infra
 npm install
 cdk bootstrap   # first time only, per account/region
+
 cdk deploy RaceDayStack --outputs-file outputs.json
+API_URL=$(jq -r '.RaceDayStack.ApiEndpoint' outputs.json)
+cdk deploy FrontendDeployStack -c apiUrl="$API_URL"
 cdk deploy MonitoringStack -c notifyEmail=you@example.com
 cdk deploy DevOpsAgentStack
 ```
-
-> `notifyEmail` is optional. If provided, you'll receive an email when alarms fire — confirm the SNS subscription from your inbox.
-
-The CloudWatch → SNS → DevOps Agent webhook subscription is **fully automated**. During `DevOpsAgentStack` deployment, a CDK custom resource Lambda:
-1. Calls `ListWebhooks` on the DevOps Agent API to retrieve the EventChannel webhook URL
-2. Subscribes the URL to the `raceday-incidents` SNS topic automatically
-3. Unsubscribes automatically when the stack is deleted
-
-The webhook URL and SNS subscription ARN are available as stack outputs. No manual steps required.
-
-### 2. Build & Deploy Frontend
-
-Use the `ApiEndpoint` value from `outputs.json`:
-
-```bash
-cd ../frontend
-VITE_API_BASE_URL=https://<api-id>.execute-api.ap-southeast-2.amazonaws.com \
-  npm run build
-
-aws s3 sync dist/ s3://$(cat ../infra/outputs.json | jq -r '.RaceDayStack.S3BucketName') --delete
-
-aws cloudfront create-invalidation \
-  --distribution-id $(cat ../infra/outputs.json | jq -r '.RaceDayStack.CloudFrontDistributionId') \
-  --paths "/*"
-```
-
-The app will be live at the `CloudFrontDomain` output URL.
 
 ### CDK Outputs
 
@@ -146,8 +143,10 @@ The app will be live at the `CloudFrontDomain` output URL.
 |---|---|---|
 | `RaceDayStack` | `ApiEndpoint` | API Gateway URL — use as `VITE_API_BASE_URL` |
 | `RaceDayStack` | `CloudFrontDomain` | Frontend URL |
-| `RaceDayStack` | `S3BucketName` | Sync `frontend/dist/` here |
-| `RaceDayStack` | `CloudFrontDistributionId` | Run cache invalidation after frontend deploy |
+| `RaceDayStack` | `S3BucketName` | Frontend bucket (managed by FrontendDeployStack) |
+| `RaceDayStack` | `CloudFrontDistributionId` | CF distribution (invalidated by FrontendDeployStack) |
+| `FrontendDeployStack` | `DeployedTo` | S3 bucket URL of the deployed build |
+| `FrontendDeployStack` | `ApiUrlUsed` | `VITE_API_BASE_URL` baked into this build |
 | `MonitoringStack` | `SnsTopicArn` | SNS topic for incident alerts |
 | `DevOpsAgentStack` | `AgentSpaceId` | DevOps Agent Space ID |
 | `DevOpsAgentStack` | `AgentSpaceArn` | DevOps Agent Space ARN |
